@@ -78,7 +78,7 @@ jobs:
             --no-progress
             --max-retries 2
             --timeout 20
-            **/*.md
+            './**/*.md'
           fail: true
 
   go-test:
