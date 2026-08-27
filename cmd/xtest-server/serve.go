@@ -58,7 +58,7 @@ func serveTCP(addr string) {
 		}
 		go func(c net.Conn) {
 			defer func() { <-connSem }()
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			r, w, isWS, handled := tryUpgradeWS(c, c)
 			if handled {

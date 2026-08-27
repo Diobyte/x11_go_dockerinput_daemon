@@ -19,6 +19,7 @@ const (
 var (
 	wsMagic            = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 	errWSFrameTooLarge = errors.New("websocket frame exceeds 1 MiB")
+	errWSControlLarge  = errors.New("websocket control frame exceeds 125 bytes")
 )
 
 func tryUpgradeWS(r io.Reader, w io.Writer) (io.Reader, io.Writer, bool, bool) {
@@ -124,6 +125,9 @@ func (wc *wsConn) Read(p []byte) (int, error) {
 		if payLen > 1<<20 {
 			return 0, errWSFrameTooLarge
 		}
+		if opcode >= 0x08 && payLen > 125 {
+			return 0, errWSControlLarge
+		}
 
 		var mask [4]byte
 		if masked {
@@ -153,7 +157,7 @@ func (wc *wsConn) Read(p []byte) (int, error) {
 		case 0x09:
 			pong := make([]byte, 2+len(payload))
 			pong[0] = 0x8A
-			pong[1] = byte(len(payload))
+			pong[1] = hdr[1] & 0x7F
 			copy(pong[2:], payload)
 			_, _ = wc.w.Write(pong)
 			continue
@@ -167,16 +171,17 @@ func (wc *wsConn) Write(p []byte) (int, error) {
 	n := len(p)
 	frame := make([]byte, 0, 2+8+n)
 	frame = append(frame, 0x81)
-	if n < 126 {
-		frame = append(frame, byte(n))
-	} else if n < 65536 {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], uint64(n))
+	switch {
+	case n < 126:
+		frame = append(frame, encoded[7])
+	case n < 65536:
 		frame = append(frame, 126)
-		frame = append(frame, byte(n>>8), byte(n))
-	} else {
+		frame = append(frame, encoded[6:]...)
+	default:
 		frame = append(frame, 127)
-		b := make([]byte, 8)
-		binary.BigEndian.PutUint64(b, uint64(n))
-		frame = append(frame, b...)
+		frame = append(frame, encoded[:]...)
 	}
 	frame = append(frame, p...)
 	_, err := wc.w.Write(frame)

@@ -21,7 +21,7 @@ func startXvfb(t *testing.T) (string, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proc := exec.Command(xvfb, "-displayfd", "3", "-screen", "0", "1280x720x24", "-nolisten", "tcp", "-ac")
+	proc := exec.CommandContext(t.Context(), xvfb, "-displayfd", "3", "-screen", "0", "1280x720x24", "-nolisten", "tcp", "-ac") //nolint:gosec // resolved test dependency
 	proc.Stderr = io.Discard
 	proc.ExtraFiles = []*os.File{w}
 	if err := proc.Start(); err != nil {

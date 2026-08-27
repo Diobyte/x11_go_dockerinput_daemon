@@ -1,6 +1,7 @@
 package vnext
 
 import (
+	"errors"
 	"os"
 	"testing"
 )
@@ -14,7 +15,7 @@ func TestAdmitFlagsEmptyDefaultsV2(t *testing.T) {
 
 func TestAdmitFlagsWSAliasesTCP(t *testing.T) {
 	_, _, err := AdmitFlags("", "127.0.0.1:9999", "unix:/run/xtest.sock")
-	if err != ErrDualBind {
+	if !errors.Is(err, ErrDualBind) {
 		t.Fatalf("ws+vnext dual bind: %v", err)
 	}
 	mode, addr, err := AdmitFlags("", "127.0.0.1:0", "")
@@ -25,7 +26,7 @@ func TestAdmitFlagsWSAliasesTCP(t *testing.T) {
 
 func TestSelectModeXOR(t *testing.T) {
 	_, _, err := SelectMode("127.0.0.1:9999", "unix:/tmp/vnext.sock")
-	if err != ErrDualBind {
+	if !errors.Is(err, ErrDualBind) {
 		t.Fatalf("dual bind: %v", err)
 	}
 	mode, addr, err := SelectMode("127.0.0.1:0", "")
@@ -45,7 +46,7 @@ func TestParseUnixListenRejectsPlaintext(t *testing.T) {
 		"unix:/tmp/../run/x", "unix:/tmp/foo\nbar", "unix:/tmp/foo\x00bar",
 	}
 	for _, s := range bads {
-		if _, err := ParseUnixListen(s); err != ErrNotUnix {
+		if _, err := ParseUnixListen(s); !errors.Is(err, ErrNotUnix) {
 			t.Fatalf("%q: %v", s, err)
 		}
 	}
@@ -56,18 +57,19 @@ func TestParseUnixListenRejectsPlaintext(t *testing.T) {
 }
 
 func TestParseAllowlist(t *testing.T) {
-	if _, err := ParseAllowlist(""); err != ErrEmptyAllowlist {
+	if _, err := ParseAllowlist(""); !errors.Is(err, ErrEmptyAllowlist) {
 		t.Fatalf("empty: %v", err)
 	}
 	got, err := ParseAllowlist("euid")
-	if err != nil || len(got) != 1 || got[0] != uint32(os.Geteuid()) {
+	wantUID, wantErr := processID(os.Geteuid())
+	if err != nil || wantErr != nil || len(got) != 1 || got[0] != wantUID {
 		t.Fatalf("euid %v %v", got, err)
 	}
 	got, err = ParseAllowlist("1000,1001")
 	if err != nil || len(got) != 2 || got[0] != 1000 || got[1] != 1001 {
 		t.Fatalf("list %v %v", got, err)
 	}
-	if _, err := ParseAllowlist("nope"); err != ErrBadAllowlist {
+	if _, err := ParseAllowlist("nope"); !errors.Is(err, ErrBadAllowlist) {
 		t.Fatalf("bad: %v", err)
 	}
 }
@@ -78,7 +80,8 @@ func TestParseGIDAllowlist(t *testing.T) {
 		t.Fatalf("empty gid: %v %v", got, err)
 	}
 	got, err = ParseGIDAllowlist("egid")
-	if err != nil || len(got) != 1 || got[0] != uint32(os.Getegid()) {
+	wantGID, wantErr := processID(os.Getegid())
+	if err != nil || wantErr != nil || len(got) != 1 || got[0] != wantGID {
 		t.Fatalf("egid %v %v", got, err)
 	}
 	got, err = ParseGIDAllowlist("10,20")

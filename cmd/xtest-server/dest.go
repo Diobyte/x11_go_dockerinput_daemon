@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,7 +28,7 @@ var destReadIdle = 30 * time.Second
 var (
 	errLivePeer         = errors.New("destination socket has a live peer")
 	errParentNotPrivate = errors.New("destination socket parent must be owner-only mode 0700")
-	errXCall            = errors.New("X call failed")
+	errXCall            = errors.New("x call failed")
 	errCoordOutOfRange  = errors.New("coordinate exceeds Xlib int")
 )
 
@@ -179,8 +181,10 @@ func (b *xDestBackend) ManagedClients() ([]vnext.WindowInfo, error) {
 			return vnext.ErrUnavailable
 		}
 		h := fnv.New64a()
+		var encoded [4]byte
 		for _, id := range xids {
-			_, _ = h.Write([]byte{byte(id), byte(id >> 8), byte(id >> 16), byte(id >> 24)})
+			binary.LittleEndian.PutUint32(encoded[:], id)
+			_, _ = h.Write(encoded[:])
 		}
 		sum := h.Sum64()
 		if b.listHash != 0 && sum != b.listHash {
@@ -229,8 +233,10 @@ func (b *xDestBackend) Revalidate(ref vnext.WindowRef) error {
 			return vnext.ErrUnavailable
 		}
 		h := fnv.New64a()
+		var encoded [4]byte
 		for _, id := range xids {
-			_, _ = h.Write([]byte{byte(id), byte(id >> 8), byte(id >> 16), byte(id >> 24)})
+			binary.LittleEndian.PutUint32(encoded[:], id)
+			_, _ = h.Write(encoded[:])
 		}
 		sum := h.Sum64()
 		if b.listHash != 0 && sum != b.listHash {
@@ -325,7 +331,8 @@ func listenUnixDest(path string) (net.Listener, error) {
 			return nil, fmt.Errorf("%w: %s", errLivePeer, path)
 		}
 		if fi.Mode()&os.ModeSocket != 0 {
-			c, derr := net.DialTimeout("unix", path, 200*time.Millisecond)
+			dialer := net.Dialer{Timeout: 200 * time.Millisecond}
+			c, derr := dialer.DialContext(context.Background(), "unix", path)
 			if derr == nil {
 				_ = c.Close()
 				return nil, fmt.Errorf("%w: %s", errLivePeer, path)
@@ -340,7 +347,7 @@ func listenUnixDest(path string) (net.Listener, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	ln, err := net.Listen("unix", path)
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", path)
 	if err != nil {
 		return nil, err
 	}
@@ -366,7 +373,8 @@ func checkUnixParent(path string) error {
 		return errParentNotPrivate
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok || st.Uid != uint32(os.Geteuid()) {
+	euid, euidOK := currentEUID()
+	if !ok || !euidOK || st.Uid != euid {
 		return errParentNotPrivate
 	}
 	if fi.Mode().Perm()&0o077 != 0 {
@@ -385,7 +393,6 @@ func serveVNext(path string, allow, gids []uint32) {
 		fmt.Fprintf(os.Stderr, "xtest-server: %v\n", err)
 		os.Exit(1)
 	}
-	defer ln.Close()
 	fmt.Fprintln(os.Stderr, destModeLine(path))
 	backend := destBackend(allow)
 	connSem := make(chan struct{}, destMaxConns)
@@ -458,7 +465,7 @@ func allowPeer(conn net.Conn, allow, gids []uint32) bool {
 }
 
 func serveVNextConn(conn net.Conn, backend vnext.Backend) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	sess := vnext.NewSession()
 	defer sess.Release(backend)
 	sc := bufio.NewScanner(conn)

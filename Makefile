@@ -32,6 +32,7 @@ tidy-check:
 	elif ! command -v go >/dev/null 2>&1; then \
 		printf '%s\n' 'tidy-check: FAIL (Go is required once go.mod exists)' >&2; exit 1; \
 	else \
+		set -e; \
 		go mod tidy -diff; \
 		printf '%s\n' 'tidy-check: PASS'; \
 	fi
@@ -42,6 +43,7 @@ build:
 	elif ! command -v go >/dev/null 2>&1; then \
 		printf '%s\n' 'build: FAIL (Go is required once go.mod exists)' >&2; exit 1; \
 	else \
+		set -e; \
 		go build -mod=readonly ./...; \
 		printf '%s\n' 'build: PASS'; \
 	fi
@@ -52,6 +54,7 @@ test:
 	elif ! command -v go >/dev/null 2>&1; then \
 		printf '%s\n' 'test: FAIL (Go is required once go.mod exists)' >&2; exit 1; \
 	else \
+		set -e; \
 		go vet -mod=readonly ./...; \
 		go test -mod=readonly -race ./...; \
 		printf '%s\n' 'test: PASS (vet and race tests)'; \
@@ -63,6 +66,7 @@ lint:
 	elif ! command -v golangci-lint >/dev/null 2>&1; then \
 		printf '%s\n' 'lint: SKIP LOCAL (golangci-lint is mandatory in CI)'; \
 	else \
+		set -e; \
 		GOFLAGS=-mod=readonly golangci-lint run --timeout=5m; \
 		printf '%s\n' 'lint: PASS'; \
 	fi

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"os"
 	"strings"
 	"syscall"
@@ -8,8 +9,6 @@ import (
 )
 
 const exitLockHeld = 75
-
-var singletonLock *os.File
 
 func displayLockName() string {
 	d := os.Getenv("DISPLAY")
@@ -44,11 +43,20 @@ func openLockFile(path string) (*os.File, error) {
 		_ = syscall.Close(fd)
 		return nil, err
 	}
-	if st.Mode&syscall.S_IFMT != syscall.S_IFREG || st.Uid != uint32(os.Geteuid()) {
+	euid, ok := currentEUID()
+	if !ok || st.Mode&syscall.S_IFMT != syscall.S_IFREG || st.Uid != euid {
 		_ = syscall.Close(fd)
 		return nil, syscall.EPERM
 	}
 	return os.NewFile(uintptr(fd), path), nil
+}
+
+func currentEUID() (uint32, bool) {
+	id := os.Geteuid()
+	if id < 0 || uint64(id) > math.MaxUint32 {
+		return 0, false
+	}
+	return uint32(id), true
 }
 
 func acquireSingletonLock() (*os.File, bool) {

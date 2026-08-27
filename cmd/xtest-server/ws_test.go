@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // RFC6455 magic is SHA-1
 	"encoding/base64"
 	"io"
 	"strings"
@@ -55,7 +55,7 @@ func TestWsConn_RoundTrip(t *testing.T) {
 	}
 
 	out := make([]byte, len(msg))
-	n, err = io.ReadFull(wc, out)
+	_, err = io.ReadFull(wc, out)
 	if err != nil {
 		t.Fatal(err)
 	}

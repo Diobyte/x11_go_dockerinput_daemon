@@ -2,6 +2,7 @@ package v2live_test
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -18,13 +19,10 @@ func TestDaemonDestUnixLaunch(t *testing.T) {
 	defer stopDisplay()
 	bin := buildDaemon(t)
 
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	dir := privateTempDir(t)
 	sock := filepath.Join(dir, "xtest.sock")
 	stderr := &safeBuffer{}
-	cmd := exec.Command(bin, "-vnext", "unix:"+sock)
+	cmd := exec.CommandContext(t.Context(), bin, "-vnext", "unix:"+sock) //nolint:gosec // test-built binary
 	cmd.Env = append(os.Environ(), "DISPLAY="+display)
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
@@ -40,7 +38,8 @@ func TestDaemonDestUnixLaunch(t *testing.T) {
 	var conn net.Conn
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		c, err := net.DialTimeout("unix", sock, 200*time.Millisecond)
+		dialer := net.Dialer{Timeout: 200 * time.Millisecond}
+		c, err := dialer.DialContext(context.Background(), "unix", sock)
 		if err == nil {
 			conn = c
 			break
@@ -50,7 +49,7 @@ func TestDaemonDestUnixLaunch(t *testing.T) {
 	if conn == nil {
 		t.Fatalf("dest unix dial failed stderr=%s", stderr.String())
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if !strings.Contains(stderr.String(), "mode dest unix") {
 		t.Fatalf("missing dest mode line: %s", stderr.String())
 	}
@@ -77,12 +76,9 @@ func TestDaemonDestUnixLaunch(t *testing.T) {
 
 func TestEmptyAllowlistDoesNotListen(t *testing.T) {
 	bin := buildDaemon(t)
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	dir := privateTempDir(t)
 	sock := filepath.Join(dir, "xtest.sock")
-	cmd := exec.Command(bin, "-vnext", "unix:"+sock, "-vnext-allow", "")
+	cmd := exec.CommandContext(t.Context(), bin, "-vnext", "unix:"+sock, "-vnext-allow", "") //nolint:gosec // test-built binary
 	out, err := cmd.CombinedOutput()
 	if cmd.ProcessState == nil || cmd.ProcessState.ExitCode() == 0 {
 		t.Fatalf("empty allowlist listened: err=%v out=%s", err, out)
@@ -97,12 +93,9 @@ func TestDaemonRefusesHostXwayland(t *testing.T) {
 		t.Skip("no Wayland session")
 	}
 	bin := buildDaemon(t)
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	dir := privateTempDir(t)
 	sock := filepath.Join(dir, "xtest.sock")
-	cmd := exec.Command(bin, "-vnext", "unix:"+sock)
+	cmd := exec.CommandContext(t.Context(), bin, "-vnext", "unix:"+sock) //nolint:gosec // test-built binary
 	cmd.Env = append(os.Environ(), "DISPLAY="+os.Getenv("DISPLAY"))
 	out, err := cmd.CombinedOutput()
 	if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 75 {
@@ -122,13 +115,10 @@ func TestDaemonRefusesHostXwayland(t *testing.T) {
 func TestDestDisplayRestartIsFatal(t *testing.T) {
 	display, stopDisplay := startXvfb(t)
 	bin := buildDaemon(t)
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	dir := privateTempDir(t)
 	sock := filepath.Join(dir, "xtest.sock")
 	stderr := &safeBuffer{}
-	cmd := exec.Command(bin, "-vnext", "unix:"+sock)
+	cmd := exec.CommandContext(t.Context(), bin, "-vnext", "unix:"+sock) //nolint:gosec // test-built binary
 	cmd.Env = append(os.Environ(), "DISPLAY="+display)
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
@@ -143,7 +133,8 @@ func TestDestDisplayRestartIsFatal(t *testing.T) {
 	var conn net.Conn
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		c, err := net.DialTimeout("unix", sock, 200*time.Millisecond)
+		dialer := net.Dialer{Timeout: 200 * time.Millisecond}
+		c, err := dialer.DialContext(context.Background(), "unix", sock)
 		if err == nil {
 			conn = c
 			break
@@ -171,4 +162,13 @@ func TestXephyrWMLiveEWMH(t *testing.T) {
 		t.Skip("Xephyr and a compatible window manager are unavailable")
 	}
 	t.Skip("Xephyr+WM fixture not wired (recorded remainder; skip-not-pass)")
+}
+
+func privateTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // Unix socket parent requires search permission
+		t.Fatal(err)
+	}
+	return dir
 }

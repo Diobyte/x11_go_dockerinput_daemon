@@ -30,6 +30,7 @@ type Fake struct {
 	active    uint32
 }
 
+// NewFake creates a recording backend with a usable default display.
 func NewFake() *Fake {
 	return &Fake{
 		keys:    map[string]uint{"F1": 67, "Shift_L": 50},
@@ -40,6 +41,7 @@ func NewFake() *Fake {
 	}
 }
 
+// ScreenGeometry returns the configured fake display dimensions.
 func (f *Fake) ScreenGeometry() (int, int, error) {
 	if f.ScreenW <= 0 || f.ScreenH <= 0 {
 		return 0, 0, ErrUnavailable
@@ -53,6 +55,7 @@ func (f *Fake) record(s string) {
 	f.mu.Unlock()
 }
 
+// Snapshot returns a copy of recorded backend calls.
 func (f *Fake) Snapshot() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -61,6 +64,7 @@ func (f *Fake) Snapshot() []string {
 	return out
 }
 
+// KeycodeFor resolves a configured fake key name.
 func (f *Fake) KeycodeFor(name string) uint {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -70,11 +74,13 @@ func (f *Fake) KeycodeFor(name string) uint {
 	return f.keys[name]
 }
 
+// WarpMouse records a pointer warp.
 func (f *Fake) WarpMouse(x, y int) error {
 	f.record(fmt.Sprintf("warp:%d,%d", x, y))
 	return nil
 }
 
+// SendKey records a key transition.
 func (f *Fake) SendKey(keycode uint, press bool) error {
 	dir := "up"
 	if press {
@@ -84,6 +90,7 @@ func (f *Fake) SendKey(keycode uint, press bool) error {
 	return nil
 }
 
+// SendButton records a button transition.
 func (f *Fake) SendButton(button uint, press bool) error {
 	dir := "up"
 	if press {
@@ -93,6 +100,7 @@ func (f *Fake) SendButton(button uint, press bool) error {
 	return nil
 }
 
+// ManagedClients returns a detached copy of configured windows.
 func (f *Fake) ManagedClients() ([]WindowInfo, error) {
 	if !f.atomOK(NetClientListAtom) {
 		return nil, ErrUnavailable
@@ -113,6 +121,7 @@ func (f *Fake) ManagedClients() ([]WindowInfo, error) {
 	return out, nil
 }
 
+// Revalidate checks a window reference against the fake snapshot.
 func (f *Fake) Revalidate(ref WindowRef) error {
 	if !f.atomOK(NetClientListAtom) {
 		return ErrUnavailable
@@ -143,6 +152,7 @@ func (f *Fake) Revalidate(ref WindowRef) error {
 	return ErrRefMismatch
 }
 
+// ActivateAlwaysBoth records both activation mechanisms.
 func (f *Fake) ActivateAlwaysBoth(ref WindowRef) error {
 	if !f.atomOK(NetActiveWindowAtom) {
 		return ErrUnavailable
@@ -156,12 +166,14 @@ func (f *Fake) ActivateAlwaysBoth(ref WindowRef) error {
 	return nil
 }
 
+// ActiveWindow returns the most recently activated window.
 func (f *Fake) ActiveWindow() (uint32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.active, nil
 }
 
+// SetFullscreen records a fullscreen state transition.
 func (f *Fake) SetFullscreen(ref WindowRef, add bool) error {
 	if !f.atomOK(NetWMStateAtom) || !f.atomOK(NetWMStateFullscreenAtom) {
 		return ErrUnavailable

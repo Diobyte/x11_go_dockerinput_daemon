@@ -2,6 +2,7 @@ package vnext
 
 import (
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,16 +13,23 @@ import (
 type Mode int
 
 const (
+	// ModeNone indicates that no mutation transport was selected.
 	ModeNone Mode = iota
+	// ModeV2 selects the legacy TCP or standard-input transport.
 	ModeV2
+	// ModeVNext selects the private Unix destination transport.
 	ModeVNext
 )
 
 var (
-	ErrDualBind       = errors.New("vnext: -tcp/-ws and -vnext cannot both be set")
-	ErrNotUnix        = errors.New("vnext: destination listen must be unix:path (no wildcard plaintext)")
+	// ErrDualBind rejects simultaneous legacy and destination transports.
+	ErrDualBind = errors.New("vnext: -tcp/-ws and -vnext cannot both be set")
+	// ErrNotUnix rejects destination transports other than an absolute Unix socket.
+	ErrNotUnix = errors.New("vnext: destination listen must be unix:path (no wildcard plaintext)")
+	// ErrEmptyAllowlist rejects destination mode without an admitted user.
 	ErrEmptyAllowlist = errors.New("vnext: empty dest allowlist does not listen")
-	ErrBadAllowlist   = errors.New("vnext: dest allowlist must be euid or comma-separated UIDs")
+	// ErrBadAllowlist rejects malformed user or group identifiers.
+	ErrBadAllowlist = errors.New("vnext: dest allowlist must be euid or comma-separated UIDs")
 )
 
 // AdmitFlags applies the daemon flag composition: -ws aliases -tcp, then XOR
@@ -90,7 +98,11 @@ func ParseAllowlist(spec string) ([]uint32, error) {
 			continue
 		}
 		if p == "euid" {
-			out = append(out, uint32(os.Geteuid()))
+			u, err := processID(os.Geteuid())
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, u)
 			continue
 		}
 		u, err := strconv.ParseUint(p, 10, 32)
@@ -119,7 +131,11 @@ func ParseGIDAllowlist(spec string) ([]uint32, error) {
 			continue
 		}
 		if p == "egid" {
-			out = append(out, uint32(os.Getegid()))
+			u, err := processID(os.Getegid())
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, u)
 			continue
 		}
 		u, err := strconv.ParseUint(p, 10, 32)
@@ -132,4 +148,11 @@ func ParseGIDAllowlist(spec string) ([]uint32, error) {
 		return nil, ErrBadAllowlist
 	}
 	return out, nil
+}
+
+func processID(id int) (uint32, error) {
+	if id < 0 || uint64(id) > math.MaxUint32 {
+		return 0, ErrBadAllowlist
+	}
+	return uint32(id), nil
 }

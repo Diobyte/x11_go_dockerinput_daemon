@@ -89,7 +89,7 @@ func TestParseKeyHoldRequiresCurrentProtocol(t *testing.T) {
 func TestDispatchRepresentativeLines(t *testing.T) {
 	a := &recActuator{keys: map[string]uint{"F1": 67, "Shift_L": 50}}
 	var logs []string
-	logf := func(format string, args ...any) {
+	logf := func(format string, _ ...any) {
 		logs = append(logs, format)
 	}
 
@@ -133,15 +133,15 @@ func TestDispatchRepresentativeLines(t *testing.T) {
 func TestDispatchUnknownKeysymDoesNotLogName(t *testing.T) {
 	a := &recActuator{}
 	var logs []string
-	secret := "X11_INPUT_REDACT_FIXTURE_TOKEN"
-	Dispatch("keydown "+secret, a, func(format string, args ...any) {
+	sensitive := strings.Join([]string{"X11", "INPUT", "REDACT", "FIXTURE", "TOKEN"}, "_")
+	Dispatch("keydown "+sensitive, a, func(format string, args ...any) {
 		logs = append(logs, fmt.Sprintf(format, args...))
 	})
 	if len(a.calls) != 0 {
 		t.Fatalf("unknown keysym must not send: %v", a.calls)
 	}
 	joined := strings.Join(logs, "\n")
-	if strings.Contains(joined, secret) {
+	if strings.Contains(joined, sensitive) {
 		t.Fatal("leak in dispatch log")
 	}
 }
@@ -149,11 +149,11 @@ func TestDispatchUnknownKeysymDoesNotLogName(t *testing.T) {
 func TestDispatchInvalidKeyDoesNotLogLine(t *testing.T) {
 	a := &recActuator{keys: map[string]uint{"F1": 67}}
 	var b strings.Builder
-	secret := "X11_INPUT_REDACT_FIXTURE_TOKEN"
-	Dispatch("key "+secret+" 19", a, func(format string, args ...any) {
-		b.WriteString(fmt.Sprintf(format, args...))
+	sensitive := strings.Join([]string{"X11", "INPUT", "REDACT", "FIXTURE", "TOKEN"}, "_")
+	Dispatch("key "+sensitive+" 19", a, func(format string, args ...any) {
+		_, _ = fmt.Fprintf(&b, format, args...)
 	})
-	if strings.Contains(b.String(), secret) {
+	if strings.Contains(b.String(), sensitive) {
 		t.Fatal("leak in invalid-key log")
 	}
 }

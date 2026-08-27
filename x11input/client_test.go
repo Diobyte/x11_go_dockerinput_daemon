@@ -13,11 +13,11 @@ import (
 )
 
 func TestDialWritesOnceWithoutReadyOnSocket(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	var writes atomic.Int32
 	errCh := make(chan error, 1)
@@ -27,7 +27,7 @@ func TestDialWritesOnceWithoutReadyOnSocket(t *testing.T) {
 			errCh <- err
 			return
 		}
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 		buf := make([]byte, 64)
 		n, err := c.Read(buf)
 		if err != nil {
@@ -48,7 +48,7 @@ func TestDialWritesOnceWithoutReadyOnSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if err := client.WriteLine(ctx, "mousemove 1 1"); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestDialWritesOnceWithoutReadyOnSocket(t *testing.T) {
 
 func TestWriteLineDoesNotRetry(t *testing.T) {
 	server, clientConn := net.Pipe()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 
 	go func() {
 		buf := make([]byte, 32)
@@ -78,7 +78,7 @@ func TestWriteLineDoesNotRetry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	client := x11input.New(clientConn)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if err := client.WriteLine(ctx, "mousemove 1 1"); err != nil {
 		t.Fatalf("first write should succeed: %v", err)
@@ -111,12 +111,12 @@ func TestWaitReady(t *testing.T) {
 
 func TestWriteLineRejectsEmbeddedNewline(t *testing.T) {
 	a, b := net.Pipe()
-	defer a.Close()
-	defer b.Close()
+	defer func() { _ = a.Close() }()
+	defer func() { _ = b.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	client := x11input.New(a)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if err := client.WriteLine(ctx, "keydown F1\nkeyup F1"); err == nil {
 		t.Fatal("embedded newline must fail")
 	}

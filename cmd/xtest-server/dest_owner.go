@@ -44,9 +44,3 @@ func (o *xOwner) call(fn func()) {
 	}
 	<-done
 }
-
-func (o *xOwner) callErr(fn func() error) error {
-	var err error
-	o.call(func() { err = fn() })
-	return err
-}

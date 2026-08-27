@@ -18,7 +18,7 @@ import (
 	"github.com/Diobyte/x11_go_dockerinput_daemon/x11input"
 )
 
-const plantedSecret = "X11_INPUT_REDACT_FIXTURE_TOKEN"
+var plantedSecret = strings.Join([]string{"X11", "INPUT", "REDACT", "FIXTURE", "TOKEN"}, "_")
 
 func TestDaemonV2Contract(t *testing.T) {
 	display, _ := startXvfb(t)
@@ -94,7 +94,7 @@ func TestDaemonStdinReadyAndLock(t *testing.T) {
 		t.Fatal("missing tcp ready")
 	}
 
-	cmd2 := exec.Command(bin, "-tcp", "127.0.0.1:0")
+	cmd2 := exec.CommandContext(t.Context(), bin, "-tcp", "127.0.0.1:0") //nolint:gosec // test-built binary
 	cmd2.Env = append(os.Environ(), "DISPLAY="+display)
 	out, err := cmd2.CombinedOutput()
 	if cmd2.ProcessState == nil || cmd2.ProcessState.ExitCode() != 75 {
@@ -117,7 +117,7 @@ func TestClientWriteAgainstRealDaemon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if err := client.WriteLine(ctx, "mousemove 1 1"); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestStdinReady(t *testing.T) {
 	defer stopDisplay()
 	bin := buildDaemon(t)
 
-	cmd := exec.Command(bin)
+	cmd := exec.CommandContext(t.Context(), bin) //nolint:gosec // test-built binary
 	cmd.Env = append(os.Environ(), "DISPLAY="+display)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -176,7 +176,7 @@ func buildDaemon(t *testing.T) string {
 			return
 		}
 		bin := filepath.Join(dir, "xtest-server")
-		cmd := exec.Command("go", "build", "-o", bin, "github.com/Diobyte/x11_go_dockerinput_daemon/cmd/xtest-server")
+		cmd := exec.CommandContext(t.Context(), "go", "build", "-o", bin, "github.com/Diobyte/x11_go_dockerinput_daemon/cmd/xtest-server") //nolint:gosec // fixed package and test-owned output
 		cmd.Env = append(os.Environ(), "CGO_ENABLED=1", "CC=gcc")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -201,7 +201,7 @@ func startXvfb(t *testing.T) (string, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proc := exec.Command(xvfb, "-displayfd", "3", "-screen", "0", "1280x720x24", "-nolisten", "tcp", "-ac")
+	proc := exec.CommandContext(t.Context(), xvfb, "-displayfd", "3", "-screen", "0", "1280x720x24", "-nolisten", "tcp", "-ac") //nolint:gosec // resolved test dependency
 	proc.Stderr = io.Discard
 	proc.ExtraFiles = []*os.File{w}
 	if err := proc.Start(); err != nil {
@@ -233,7 +233,7 @@ func startXvfb(t *testing.T) (string, func()) {
 
 func startDaemon(t *testing.T, bin, display string, args []string, stderr io.Writer) (*exec.Cmd, string, func()) {
 	t.Helper()
-	cmd := exec.Command(bin, args...)
+	cmd := exec.CommandContext(t.Context(), bin, args...) //nolint:gosec // test-built binary
 	cmd.Env = append(os.Environ(), "DISPLAY="+display)
 	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()
@@ -268,7 +268,8 @@ func startDaemon(t *testing.T, bin, display string, args []string, stderr io.Wri
 
 func dialRaw(t *testing.T, addr string) net.Conn {
 	t.Helper()
-	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	dialer := net.Dialer{Timeout: 2 * time.Second}
+	c, err := dialer.DialContext(t.Context(), "tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}

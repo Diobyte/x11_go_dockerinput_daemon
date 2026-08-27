@@ -107,10 +107,7 @@ func TestDestWindowMethodsWithoutDisplay(t *testing.T) {
 }
 
 func TestListenUnixDestStaleUnlink(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	dir := privateTempDir(t)
 	path := filepath.Join(dir, "xtest.sock")
 	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
@@ -119,7 +116,7 @@ func TestListenUnixDestStaleUnlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	fi, err := os.Lstat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -130,10 +127,7 @@ func TestListenUnixDestStaleUnlink(t *testing.T) {
 }
 
 func TestListenUnixDestSymlinkRefused(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	dir := privateTempDir(t)
 	target := filepath.Join(dir, "target")
 	path := filepath.Join(dir, "xtest.sock")
 	if err := os.WriteFile(target, []byte("x"), 0o600); err != nil {
@@ -153,10 +147,7 @@ func TestListenUnixDestSymlinkRefused(t *testing.T) {
 }
 
 func TestListenUnixDestDeadSocketUnlinkThenBind(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	dir := privateTempDir(t)
 	path := filepath.Join(dir, "xtest.sock")
 	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
@@ -171,20 +162,17 @@ func TestListenUnixDestDeadSocketUnlinkThenBind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln2.Close()
+	defer func() { _ = ln2.Close() }()
 }
 
 func TestListenUnixDestLivePeer(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	dir := privateTempDir(t)
 	path := filepath.Join(dir, "xtest.sock")
 	ln, err := listenUnixDest(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	_, err = listenUnixDest(path)
 	if !errors.Is(err, errLivePeer) {
 		t.Fatalf("got %v", err)
@@ -193,7 +181,7 @@ func TestListenUnixDestLivePeer(t *testing.T) {
 
 func TestListenUnixDestParentWorldWritable(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o777); err != nil {
+	if err := os.Chmod(dir, 0o777); err != nil { //nolint:gosec // verifies fail-closed parent permissions
 		t.Fatal(err)
 	}
 	_, err := listenUnixDest(filepath.Join(dir, "xtest.sock"))
@@ -203,16 +191,13 @@ func TestListenUnixDestParentWorldWritable(t *testing.T) {
 }
 
 func TestListenUnixDestChmod0600(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	dir := privateTempDir(t)
 	path := filepath.Join(dir, "xtest.sock")
 	ln, err := listenUnixDest(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	fi, err := os.Lstat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -220,6 +205,15 @@ func TestListenUnixDestChmod0600(t *testing.T) {
 	if fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %o", fi.Mode().Perm())
 	}
+}
+
+func privateTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // Unix socket parent requires search permission
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func TestServeVNextConnEOFReleasesSession(t *testing.T) {
@@ -266,7 +260,7 @@ func TestServeVNextSlowClientIdle(t *testing.T) {
 	destReadIdle = 50 * time.Millisecond
 	defer func() { destReadIdle = old }()
 	c1, c2 := net.Pipe()
-	defer c1.Close()
+	defer func() { _ = c1.Close() }()
 	f := vnext.NewFake()
 	done := make(chan struct{})
 	go func() {

@@ -9,13 +9,20 @@ import (
 type Op string
 
 const (
-	OpMove       Op = "move"
-	OpKey        Op = "key"
-	OpButton     Op = "button"
-	OpInspect    Op = "inspect"
-	OpActivate   Op = "activate"
+	// OpMove warps the pointer to an absolute coordinate.
+	OpMove Op = "move"
+	// OpKey changes one key state.
+	OpKey Op = "key"
+	// OpButton changes one pointer button state.
+	OpButton Op = "button"
+	// OpInspect reads the bounded window snapshot.
+	OpInspect Op = "inspect"
+	// OpActivate activates a validated window reference.
+	OpActivate Op = "activate"
+	// OpFullscreen changes fullscreen state for a validated window.
 	OpFullscreen Op = "fullscreen"
-	OpRelease    Op = "release"
+	// OpRelease releases holds owned by the current session.
+	OpRelease Op = "release"
 )
 
 // maxJSONLine is the dest and v2 scanner bound. Decode must not accept a

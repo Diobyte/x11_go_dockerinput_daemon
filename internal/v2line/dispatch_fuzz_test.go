@@ -17,7 +17,7 @@ func FuzzDispatch(f *testing.F) {
 	} {
 		f.Add(s)
 	}
-	f.Fuzz(func(t *testing.T, cmd string) {
+	f.Fuzz(func(_ *testing.T, cmd string) {
 		// Timed "key" holds sleep; fuzz must not block on them.
 		if strings.HasPrefix(strings.TrimSpace(cmd), "key ") {
 			_, ok := ParseKeyHold(strings.Fields(cmd))

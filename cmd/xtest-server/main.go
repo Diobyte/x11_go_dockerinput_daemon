@@ -1,3 +1,4 @@
+// Package main provides the bounded X11/XTEST input daemon.
 package main
 
 import (
@@ -63,7 +64,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "xtest-server: another instance already holds the singleton lock; exiting")
 		os.Exit(exitLockHeld)
 	}
-	singletonLock = lock
+	defer func() { _ = lock.Close() }()
 
 	if mode == vnext.ModeVNext {
 		ensureDestOwner()

@@ -10,6 +10,7 @@ type Session struct {
 	buttons map[uint]bool
 }
 
+// NewSession creates empty per-connection hold state.
 func NewSession() *Session {
 	return &Session{
 		keys:    make(map[uint]bool),
@@ -88,12 +89,14 @@ func (s *Session) Release(b Backend) Outcome {
 	return submitted()
 }
 
+// KeyDown reports whether this session owns a key hold.
 func (s *Session) KeyDown(kc uint) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.keys[kc]
 }
 
+// ButtonDown reports whether this session owns a button hold.
 func (s *Session) ButtonDown(b uint) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

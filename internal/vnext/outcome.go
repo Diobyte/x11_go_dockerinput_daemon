@@ -16,13 +16,19 @@ type Outcome struct {
 }
 
 const (
-	CodeSubmitted      = "Submitted"
-	CodeNotSubmitted   = "NotSubmitted"
+	// CodeSubmitted means the request was accepted and dispatched.
+	CodeSubmitted = "Submitted"
+	// CodeNotSubmitted means the operation is not supported.
+	CodeNotSubmitted = "NotSubmitted"
+	// CodeInvalidRequest means validation failed before dispatch.
 	CodeInvalidRequest = "InvalidRequest"
-	CodeConflict       = "Conflict"
-	CodeUnavailable    = "Unavailable"
+	// CodeConflict means a durable window reference no longer matches.
+	CodeConflict = "Conflict"
+	// CodeUnavailable means the backend could not complete the request.
+	CodeUnavailable = "Unavailable"
 )
 
+// Submitted reports whether the outcome represents successful dispatch.
 func (o Outcome) Submitted() bool { return o.Code == CodeSubmitted && o.Err == nil }
 
 func submitted() Outcome { return Outcome{Code: CodeSubmitted} }

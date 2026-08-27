@@ -112,7 +112,7 @@ type onceFailFake struct {
 	warps int
 }
 
-func (o *onceFailFake) WarpMouse(x, y int) error {
+func (o *onceFailFake) WarpMouse(_, _ int) error {
 	o.warps++
 	return errSentinel
 }
