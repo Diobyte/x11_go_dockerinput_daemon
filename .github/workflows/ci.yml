@@ -1,0 +1,208 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    name: Repository preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      has_go: ${{ steps.detect.outputs.has_go }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Detect Go module
+        id: detect
+        shell: bash
+        run: |
+          if [[ -f go.mod ]]; then
+            echo "has_go=true" >> "$GITHUB_OUTPUT"
+            echo "Go checks are required."
+          else
+            echo "has_go=false" >> "$GITHUB_OUTPUT"
+            echo "Go checks are not applicable before go.mod exists."
+          fi
+      - name: Validate repository documentation and state
+        run: make check-docs
+
+  quality:
+    name: Shell, workflow, Markdown, and links
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install Go for pinned actionlint build
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: 1.26.5
+          cache: false
+      - name: Validate GitHub Actions workflows
+        shell: bash
+        run: |
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.8 -color
+      - name: Install pinned gitleaks
+        shell: bash
+        run: |
+          GOBIN="${RUNNER_TEMP}/gitleaks-bin" go install github.com/gitleaks/gitleaks/v8@v8.30.1
+          echo "${RUNNER_TEMP}/gitleaks-bin" >> "$GITHUB_PATH"
+      - name: Scan tracked and worktree content for secrets
+        run: make check-secrets
+      - name: Check shell scripts
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
+        with:
+          scandir: scripts
+          version: v0.10.0
+      - name: Check Markdown
+        uses: DavidAnson/markdownlint-cli2-action@30a0e04f1870d58f8d717450cc6134995f993c63 # v21
+        with:
+          globs: "**/*.md"
+      - name: Check links
+        uses: lycheeverse/lychee-action@8646ba30535128ac92d33dfc9133794bfdd9b411 # v2.8.0
+        with:
+          args: >-
+            --no-progress
+            --max-retries 2
+            --timeout 20
+            **/*.md
+          fail: true
+
+  go-test:
+    name: Go build and test
+    needs: preflight
+    if: needs.preflight.outputs.has_go == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install X11 build and test dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libx11-dev libxtst-dev xvfb xauth
+      - name: Verify formatting and module graph
+        run: make fmt-check tidy-check
+      - name: Build, vet, and race test without module updates
+        run: make build test
+      - name: Reject generated or dependency drift
+        shell: bash
+        run: |
+          git diff --exit-code -- .
+          if [[ -n $(git status --porcelain=v1 --untracked-files=all) ]]; then
+            echo "Checks left untracked files in the clean CI checkout." >&2
+            git status --short
+            exit 1
+          fi
+
+  lint:
+    name: Go lint
+    needs: preflight
+    if: needs.preflight.outputs.has_go == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install X11 build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libx11-dev libxtst-dev
+      - name: Run golangci-lint read-only
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+        env:
+          GOFLAGS: -mod=readonly
+
+  fuzz:
+    name: Scheduled bounded fuzzing
+    needs: preflight
+    if: github.event_name == 'schedule' && needs.preflight.outputs.has_go == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install X11 build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libx11-dev libxtst-dev
+      - name: Run each fuzz target with per-target and total bounds
+        run: make fuzz
+        env:
+          FUZZ_TIME: 20s
+          FUZZ_TOTAL_TIMEOUT: 10m
+
+  required:
+    name: Required CI aggregate
+    if: always()
+    needs:
+      - preflight
+      - quality
+      - go-test
+      - lint
+      - fuzz
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every applicable job
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HAS_GO: ${{ needs.preflight.outputs.has_go }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          GO_TEST_RESULT: ${{ needs.go-test.result }}
+          LINT_RESULT: ${{ needs.lint.result }}
+          FUZZ_RESULT: ${{ needs.fuzz.result }}
+        run: |
+          set -euo pipefail
+
+          require_result() {
+            local job=$1 actual=$2 expected=$3
+            if [[ "$actual" != "$expected" ]]; then
+              printf '%s: expected %s, got %s\n' "$job" "$expected" "$actual" >&2
+              return 1
+            fi
+          }
+
+          require_result preflight "$PREFLIGHT_RESULT" success
+          require_result quality "$QUALITY_RESULT" success
+
+          if [[ "$HAS_GO" == true ]]; then
+            require_result go-test "$GO_TEST_RESULT" success
+            require_result lint "$LINT_RESULT" success
+          else
+            require_result go-test "$GO_TEST_RESULT" skipped
+            require_result lint "$LINT_RESULT" skipped
+          fi
+
+          if [[ "$EVENT_NAME" == schedule && "$HAS_GO" == true ]]; then
+            require_result fuzz "$FUZZ_RESULT" success
+          else
+            require_result fuzz "$FUZZ_RESULT" skipped
+          fi

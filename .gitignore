@@ -1,0 +1,53 @@
+# Go build, test, coverage, and profiling output
+/bin/
+/dist/
+/build/
+/xtest-server
+/cmd/xtest-server/xtest-server
+*.test
+*.out
+*.prof
+*.trace
+coverage.*
+go.work
+go.work.sum
+
+# Local runtime state and temporary files
+/.runtime/
+/.cache/
+/.tmp/
+/tmp/
+*.log
+*.pid
+*.sock
+
+# Credentials and local environment
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+*.token
+*.xauth
+.Xauthority
+**/.Xauthority
+.netrc
+**/.netrc
+.npmrc
+**/.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
