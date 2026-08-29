@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -271,5 +272,98 @@ func TestServeVNextSlowClientIdle(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("idle dest client was not dropped")
+	}
+}
+
+func TestDestShutdownReleasesHeldSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c1, c2 := net.Pipe()
+	defer func() { _ = c1.Close() }()
+	fake := vnext.NewFake()
+	connections := newDestConnSet()
+	if !connections.add(c2) {
+		t.Fatal("connection set rejected before shutdown")
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer connections.remove(c2)
+		serveVNextConnContext(ctx, c2, fake)
+	}()
+
+	scanner := bufio.NewScanner(c1)
+	requests := []string{
+		`{"op":"key","name":"F1","press":true}`,
+		`{"op":"button","button":1,"press":true}`,
+	}
+	for i, request := range requests {
+		if _, err := fmt.Fprintln(c1, request); err != nil {
+			t.Fatal(err)
+		}
+		if !scanner.Scan() {
+			t.Fatalf("missing response %d", i)
+		}
+	}
+
+	cancel()
+	if err := connections.shutdown(2 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not stop")
+	}
+	calls := strings.Join(fake.Snapshot(), " ")
+	if strings.Count(calls, "key:67:up") != 1 || strings.Count(calls, "button:1:up") != 1 {
+		t.Fatalf("session release calls %q", calls)
+	}
+	if strings.Contains(calls, "releaseall") {
+		t.Fatalf("global release during shutdown: %q", calls)
+	}
+}
+
+func TestDestShutdownRejectsNewConnectionsAndIsBounded(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer func() { _ = c1.Close() }()
+	connections := newDestConnSet()
+	if !connections.add(c2) {
+		t.Fatal("connection set rejected before shutdown")
+	}
+	start := time.Now()
+	err := connections.shutdown(20 * time.Millisecond)
+	if !errors.Is(err, errDestShutdownTimeout) {
+		t.Fatalf("got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("shutdown exceeded bound: %s", elapsed)
+	}
+	if connections.add(c1) {
+		t.Fatal("connection set admitted after shutdown")
+	}
+}
+
+func TestServeVNextConnDoesNotDispatchAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c1, c2 := net.Pipe()
+	defer func() { _ = c1.Close() }()
+	fake := vnext.NewFake()
+	done := make(chan struct{})
+	go func() {
+		serveVNextConnContext(ctx, c2, fake)
+		close(done)
+	}()
+	if _, err := fmt.Fprintln(c1, `{"op":"move","x":10,"y":20}`); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled handler did not stop")
+	}
+	if calls := fake.Snapshot(); len(calls) != 0 {
+		t.Fatalf("dispatched after cancellation: %v", calls)
 	}
 }

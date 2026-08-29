@@ -23,6 +23,13 @@ For parser, framing, or strict-decoding changes, also run:
 make fuzz
 ```
 
+For `Dockerfile` or `.dockerignore` changes, also run:
+
+```sh
+make docker-check
+make docker-smoke # Linux only
+```
+
 Tests should cover invalid input, disconnects, partial writes, held-input
 cleanup, and ambiguous outcomes where relevant. Never make a test pass by
 retrying a mutation whose submission status is unknown.

@@ -1,0 +1,11 @@
+**
+!go.mod
+!go.sum
+!LICENSE
+!cmd/
+!cmd/**/
+!cmd/**/*.go
+!internal/
+!internal/**/
+!internal/**/*.go
+**/*_test.go

@@ -5,7 +5,10 @@
 Start the daemon with one private Unix listener:
 
 ```text
-xtest-server -vnext unix:/absolute/path/input.sock -vnext-allow euid
+xtest-server \
+  -vnext unix:/absolute/path/input.sock \
+  -vnext-allow euid \
+  -lock-file /absolute/path/authority.lock
 ```
 
 The socket parent must already exist, be owned by the daemon user, and have mode
@@ -14,10 +17,21 @@ a comma-separated UID list. `-vnext-allow-gid` accepts `egid` or a
 comma-separated GID list. UID admission is always required; the GID list adds a
 second constraint when configured.
 
+An explicit lock file must already exist beside the socket as a regular,
+non-symlink file owned by the daemon user with mode `0600`. Its parent must be
+owned by that user with mode `0700`. The daemon never creates, replaces, or
+falls back from an explicit lock file. Separate containers targeting the same
+underlying X server must mount the same host lock inode.
+
 The daemon accepts at most ten simultaneous clients. Silent clients are closed
 after the bounded idle period. A client sends one JSON object followed by `LF`
 and receives one JSON object followed by `LF`. Frames larger than 1 MiB are
 rejected.
+
+On `SIGINT` or `SIGTERM`, the daemon stops accepting connections, closes every
+active command connection, and attempts each session's held-input release once.
+Shutdown waits at most five seconds. A mutation already in flight when shutdown
+starts can have an ambiguous outcome and must not be replayed automatically.
 
 ## Outcomes
 

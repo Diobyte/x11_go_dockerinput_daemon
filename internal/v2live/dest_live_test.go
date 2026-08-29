@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -71,6 +72,145 @@ func TestDaemonDestUnixLaunch(t *testing.T) {
 	}
 	if reply.Code != "Submitted" && reply.Code != "Unavailable" {
 		t.Fatalf("inspect code %q", reply.Code)
+	}
+}
+
+func TestExplicitLockFailurePrecedesDisplayInitialization(t *testing.T) {
+	bin := buildDaemon(t)
+	dir := privateTempDir(t)
+	sock := filepath.Join(dir, "xtest.sock")
+	missingLock := filepath.Join(dir, "missing.lock")
+	args := []string{
+		"-vnext", "unix:" + sock,
+		"-lock-file", missingLock,
+	}
+	cmd := exec.CommandContext(t.Context(), bin, args...) //nolint:gosec // test-built binary and test-owned paths
+	cmd.Env = append(os.Environ(), "DISPLAY=:65534")
+	out, err := cmd.CombinedOutput()
+	if cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 1 {
+		t.Fatalf("invalid lock exit=%v err=%v out=%s", exitOf(cmd), err, out)
+	}
+	if !strings.Contains(string(out), "lock file must already exist") {
+		t.Fatalf("missing explicit lock diagnostic: %s", out)
+	}
+	if strings.Contains(string(out), "failed to open X11 display") {
+		t.Fatalf("display initialized before lock validation: %s", out)
+	}
+	if _, statErr := os.Lstat(sock); !os.IsNotExist(statErr) {
+		t.Fatalf("invalid lock created socket %s", sock)
+	}
+}
+
+func TestLockFileCannotBeDestinationSocket(t *testing.T) {
+	bin := buildDaemon(t)
+	dir := privateTempDir(t)
+	path := filepath.Join(dir, "same-path.sock")
+	args := []string{
+		"-vnext", "unix:" + path,
+		"-lock-file", path,
+	}
+	cmd := exec.CommandContext(t.Context(), bin, args...) //nolint:gosec // test-built binary and test-owned paths
+	out, err := cmd.CombinedOutput()
+	if cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 2 {
+		t.Fatalf("same path exit=%v err=%v out=%s", exitOf(cmd), err, out)
+	}
+	if !strings.Contains(string(out), "lock file and Unix socket must differ") {
+		t.Fatalf("missing same-path diagnostic: %s", out)
+	}
+	if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("same lock and socket path created %s", path)
+	}
+}
+
+func TestDaemonDestSIGTERMDrainsSessionAndReleasesLock(t *testing.T) {
+	display, stopDisplay := startXvfb(t)
+	defer stopDisplay()
+	bin := buildDaemon(t)
+	dir := privateTempDir(t)
+	lockPath := filepath.Join(dir, "authority.lock")
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "xtest.sock")
+	args := []string{
+		"-vnext", "unix:" + sock,
+		"-lock-file", lockPath,
+	}
+
+	cmd, conn, stderr := startDestProcess(t, bin, display, args, sock)
+	if _, err := fmt.Fprintln(conn, `{"op":"key","name":"F1","press":true}`); err != nil {
+		t.Fatal(err)
+	}
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() || !strings.Contains(scanner.Text(), `"code":"Submitted"`) {
+		t.Fatalf("key down response=%q stderr=%s", scanner.Text(), stderr.String())
+	}
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	waitForCleanExit(t, cmd, stderr)
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	if scanner.Scan() {
+		t.Fatalf("connection remained open after shutdown: %q", scanner.Text())
+	}
+	_ = conn.Close()
+	if _, err := os.Lstat(sock); !os.IsNotExist(err) {
+		t.Fatalf("shutdown left destination socket %s", sock)
+	}
+
+	replacement, replacementConn, replacementStderr := startDestProcess(t, bin, display, args, sock)
+	if err := replacement.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	waitForCleanExit(t, replacement, replacementStderr)
+	_ = replacementConn.Close()
+}
+
+func startDestProcess(
+	t *testing.T,
+	bin string,
+	display string,
+	args []string,
+	sock string,
+) (*exec.Cmd, net.Conn, *safeBuffer) {
+	t.Helper()
+	stderr := &safeBuffer{}
+	cmd := exec.CommandContext(t.Context(), bin, args...) //nolint:gosec // test-built binary and fixed arguments
+	cmd.Env = append(os.Environ(), "DISPLAY="+display)
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+		}
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		dialer := net.Dialer{Timeout: 200 * time.Millisecond}
+		conn, err := dialer.DialContext(context.Background(), "unix", sock)
+		if err == nil {
+			return cmd, conn, stderr
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("destination dial failed stderr=%s", stderr.String())
+	return nil, nil, nil
+}
+
+func waitForCleanExit(t *testing.T, cmd *exec.Cmd, stderr *safeBuffer) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("daemon shutdown: %v stderr=%s", err, stderr.String())
+		}
+	case <-time.After(7 * time.Second):
+		t.Fatalf("daemon shutdown timed out stderr=%s", stderr.String())
 	}
 }
 

@@ -96,11 +96,18 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Install X11 build and test dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libx11-dev libxtst-dev xvfb xauth
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc libx11-dev libxtst-dev python3 xvfb xauth
       - name: Verify formatting and module graph
         run: make fmt-check tidy-check
       - name: Build, vet, and race test without module updates
         run: make build test
+      - name: Build and smoke-test container image
+        run: |
+          make docker-check docker-smoke \
+            DOCKER_IMAGE=x11-input-daemon:ci \
+            DOCKER_VERSION=ci \
+            DOCKER_REVISION="$GITHUB_SHA" \
+            DOCKER_DIRTY=false
       - name: Reject generated or dependency drift
         shell: bash
         run: |

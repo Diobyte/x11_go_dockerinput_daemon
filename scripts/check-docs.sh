@@ -13,6 +13,8 @@ required=(
     SECURITY.md
     LICENSE
     docs/PROTOCOL.md
+    Dockerfile
+    .dockerignore
 )
 
 for path in "${required[@]}"; do
@@ -35,7 +37,8 @@ is_reviewed_text() {
     case "$1" in
         *.md | *.markdown | *.yml | *.yaml | *.sh | *.bash | *.go | *.json | \
             *.toml | *.ini | *.env | *.txt | *.mod | *.sum | Dockerfile | \
-            Dockerfile.* | Makefile | .editorconfig | .gitattributes | .gitignore)
+            Dockerfile.* | Makefile | .dockerignore | .editorconfig | \
+            .gitattributes | .gitignore)
             return 0
             ;;
         *)

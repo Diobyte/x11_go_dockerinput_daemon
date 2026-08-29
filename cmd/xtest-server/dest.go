@@ -21,15 +21,21 @@ import (
 
 const destMaxConns = 10
 
+const (
+	destAcceptPoll      = 100 * time.Millisecond
+	destShutdownTimeout = 5 * time.Second
+)
+
 // destReadIdle bounds a silent peer so a hung client cannot occupy a slot
 // until process exit. Zero disables the deadline (tests may shorten it).
 var destReadIdle = 30 * time.Second
 
 var (
-	errLivePeer         = errors.New("destination socket has a live peer")
-	errParentNotPrivate = errors.New("destination socket parent must be owner-only mode 0700")
-	errXCall            = errors.New("x call failed")
-	errCoordOutOfRange  = errors.New("coordinate exceeds Xlib int")
+	errLivePeer            = errors.New("destination socket has a live peer")
+	errParentNotPrivate    = errors.New("destination socket parent must be owner-only mode 0700")
+	errXCall               = errors.New("x call failed")
+	errCoordOutOfRange     = errors.New("coordinate exceeds Xlib int")
+	errDestShutdownTimeout = errors.New("destination shutdown timed out")
 )
 
 var destOwnerOnce sync.Once
@@ -383,27 +389,105 @@ func checkUnixParent(path string) error {
 	return nil
 }
 
-func serveVNext(path string, allow, gids []uint32) {
+type destConnSet struct {
+	lock     sync.Mutex
+	conns    map[net.Conn]struct{}
+	closing  bool
+	drained  chan struct{}
+	drainOne sync.Once
+}
+
+func newDestConnSet() *destConnSet {
+	return &destConnSet{
+		conns:   make(map[net.Conn]struct{}, destMaxConns),
+		drained: make(chan struct{}),
+	}
+}
+
+func (s *destConnSet) add(conn net.Conn) bool {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if s.closing {
+		return false
+	}
+	s.conns[conn] = struct{}{}
+	return true
+}
+
+func (s *destConnSet) remove(conn net.Conn) {
+	s.lock.Lock()
+	delete(s.conns, conn)
+	if s.closing && len(s.conns) == 0 {
+		s.drainOne.Do(func() { close(s.drained) })
+	}
+	s.lock.Unlock()
+}
+
+func (s *destConnSet) shutdown(timeout time.Duration) error {
+	s.lock.Lock()
+	s.closing = true
+	conns := make([]net.Conn, 0, len(s.conns))
+	for conn := range s.conns {
+		conns = append(conns, conn)
+	}
+	if len(conns) == 0 {
+		s.drainOne.Do(func() { close(s.drained) })
+	}
+	s.lock.Unlock()
+
+	for _, conn := range conns {
+		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			fmt.Fprintln(os.Stderr, "xtest-server: closing destination connection during shutdown")
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-s.drained:
+		return nil
+	case <-timer.C:
+		return errDestShutdownTimeout
+	}
+}
+
+func serveVNext(ctx context.Context, path string, allow, gids []uint32) error {
 	if len(allow) == 0 {
-		fmt.Fprintln(os.Stderr, vnext.ErrEmptyAllowlist)
-		os.Exit(2)
+		return vnext.ErrEmptyAllowlist
 	}
 	ln, err := listenUnixDest(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "xtest-server: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	fmt.Fprintln(os.Stderr, destModeLine(path))
 	backend := destBackend(allow)
 	connSem := make(chan struct{}, destMaxConns)
-	for {
+	connections := newDestConnSet()
+	unixListener, ok := ln.(*net.UnixListener)
+	if !ok {
+		_ = ln.Close()
+		_ = os.Remove(path)
+		return errors.New("destination listener is not Unix")
+	}
+	var serveErr error
+	for ctx.Err() == nil {
+		if err := unixListener.SetDeadline(time.Now().Add(destAcceptPoll)); err != nil {
+			serveErr = fmt.Errorf("setting accept deadline: %w", err)
+			break
+		}
 		conn, err := ln.Accept()
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				return
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				continue
 			}
-			fmt.Fprintf(os.Stderr, "xtest-server: dest accept: %v\n", err)
-			os.Exit(1)
+			if ctx.Err() == nil && !errors.Is(err, net.ErrClosed) {
+				serveErr = fmt.Errorf("accepting destination connection: %w", err)
+			}
+			break
+		}
+		if ctx.Err() != nil {
+			_ = conn.Close()
+			break
 		}
 		if !allowPeer(conn, allow, gids) {
 			_ = conn.Close()
@@ -416,11 +500,32 @@ func serveVNext(path string, allow, gids []uint32) {
 			_ = conn.Close()
 			continue
 		}
+		if !connections.add(conn) {
+			<-connSem
+			_ = conn.Close()
+			break
+		}
 		go func(c net.Conn) {
-			defer func() { <-connSem }()
-			serveVNextConn(c, &backend)
+			defer func() {
+				connections.remove(c)
+				<-connSem
+				if recover() != nil {
+					fmt.Fprintln(os.Stderr, "xtest-server: destination handler panic")
+				}
+			}()
+			serveVNextConnContext(ctx, c, &backend)
 		}(conn)
 	}
+	if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) && serveErr == nil {
+		serveErr = fmt.Errorf("closing destination listener: %w", err)
+	}
+	if err := connections.shutdown(destShutdownTimeout); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) && serveErr == nil {
+		serveErr = fmt.Errorf("removing destination socket: %w", err)
+	}
+	return serveErr
 }
 
 func allowPeer(conn net.Conn, allow, gids []uint32) bool {
@@ -465,9 +570,17 @@ func allowPeer(conn net.Conn, allow, gids []uint32) bool {
 }
 
 func serveVNextConn(conn net.Conn, backend vnext.Backend) {
+	serveVNextConnContext(context.Background(), conn, backend)
+}
+
+func serveVNextConnContext(ctx context.Context, conn net.Conn, backend vnext.Backend) {
 	defer func() { _ = conn.Close() }()
 	sess := vnext.NewSession()
-	defer sess.Release(backend)
+	defer func() {
+		if out := sess.Release(backend); out.Code != vnext.CodeSubmitted {
+			fmt.Fprintln(os.Stderr, "xtest-server: destination session release incomplete")
+		}
+	}()
 	sc := bufio.NewScanner(conn)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for {
@@ -475,6 +588,9 @@ func serveVNextConn(conn net.Conn, backend vnext.Backend) {
 			_ = conn.SetReadDeadline(time.Now().Add(destReadIdle))
 		}
 		if !sc.Scan() {
+			break
+		}
+		if ctx.Err() != nil {
 			break
 		}
 		out := vnext.HandleLine(sc.Text(), sess, backend)
@@ -490,7 +606,7 @@ func serveVNextConn(conn net.Conn, backend vnext.Backend) {
 		}
 		_ = conn.SetWriteDeadline(time.Time{})
 	}
-	if err := sc.Err(); err != nil {
+	if err := sc.Err(); err != nil && ctx.Err() == nil && !errors.Is(err, net.ErrClosed) {
 		fmt.Fprintf(os.Stderr, "xtest-server: dest scanner: %v\n", err)
 	}
 }

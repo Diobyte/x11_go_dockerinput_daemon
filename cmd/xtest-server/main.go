@@ -3,9 +3,14 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"runtime"
+	"syscall"
 
 	"github.com/Diobyte/x11_go_dockerinput_daemon/internal/vnext"
 )
@@ -32,6 +37,7 @@ func main() {
 	vnextSpec := flag.String("vnext", "", "destination listen unix:/abs/path (XOR with -tcp and -ws; default empty)")
 	allowSpec := flag.String("vnext-allow", "euid", "dest unix peer UIDs (euid or comma list; empty does not listen)")
 	gidSpec := flag.String("vnext-allow-gid", "", "dest unix peer GIDs (egid or comma list; empty allows any GID of an allowlisted UID)")
+	lockFile := flag.String("lock-file", "", "pre-created shared singleton lock file (absolute path; no fallback)")
 	showVersion := flag.Bool("version", false, "print build identity")
 	flag.Parse()
 	if *showVersion {
@@ -57,16 +63,23 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
+		if *lockFile != "" && *lockFile == listenAddr {
+			fmt.Fprintln(os.Stderr, "xtest-server: lock file and Unix socket must differ")
+			os.Exit(2)
+		}
 	}
 
-	lock, ok := acquireSingletonLock()
-	if !ok {
+	lock, err := acquireSingletonLock(*lockFile)
+	if errors.Is(err, errLockHeld) {
 		fmt.Fprintln(os.Stderr, "xtest-server: another instance already holds the singleton lock; exiting")
 		os.Exit(exitLockHeld)
 	}
-	defer func() { _ = lock.Close() }()
-
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "xtest-server: singleton lock: %v\n", err)
+		os.Exit(1)
+	}
 	if mode == vnext.ModeVNext {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		ensureDestOwner()
 		var rc int
 		destOwner.call(func() {
@@ -75,7 +88,19 @@ func main() {
 			rc = initDisplay()
 		})
 		exitIfDisplayInit(rc)
-		serveVNext(listenAddr, allow, gids)
+		err = serveVNext(ctx, listenAddr, allow, gids)
+		if errors.Is(err, errDestShutdownTimeout) {
+			fmt.Fprintln(os.Stderr, "xtest-server: shutdown timed out before session cleanup completed")
+			os.Exit(1)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "xtest-server: destination server: %v\n", err)
+			os.Exit(1)
+		}
+		stop()
+		if err := lock.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "xtest-server: closing singleton lock")
+		}
 		return
 	}
 	exitIfDisplayInit(initDisplay())
@@ -85,5 +110,10 @@ func main() {
 		fmt.Println(stdinReadyLine())
 		serveScanner(bufio.NewScanner(os.Stdin))
 		releaseAllHeld()
+	}
+	// Keep the file reachable while a long-lived legacy listener is serving.
+	runtime.KeepAlive(lock)
+	if err := lock.Close(); err != nil {
+		fmt.Fprintln(os.Stderr, "xtest-server: closing singleton lock")
 	}
 }
