@@ -29,9 +29,10 @@ and receives one JSON object followed by `LF`. Frames larger than 1 MiB are
 rejected.
 
 On `SIGINT` or `SIGTERM`, the daemon stops accepting connections, closes every
-active command connection, and attempts each session's held-input release once.
-Shutdown waits at most five seconds. A mutation already in flight when shutdown
-starts can have an ambiguous outcome and must not be replayed automatically.
+active command connection, and lets each handler run one final session cleanup
+pass. Shutdown waits at most five seconds and does not loop on failed up events.
+A mutation already in flight when shutdown starts can have an ambiguous outcome
+and must not be replayed automatically.
 
 ## Outcomes
 

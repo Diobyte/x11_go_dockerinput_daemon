@@ -324,13 +324,66 @@ func TestDestShutdownReleasesHeldSession(t *testing.T) {
 	}
 }
 
-func TestDestShutdownRejectsNewConnectionsAndIsBounded(t *testing.T) {
+type blockingReleaseFake struct {
+	*vnext.Fake
+	releaseStarted chan struct{}
+	releaseBlock   chan struct{}
+	startOnce      sync.Once
+	unblockOnce    sync.Once
+	upCalls        atomic.Int32
+}
+
+func (f *blockingReleaseFake) SendKey(keycode uint, press bool) error {
+	if press {
+		return f.Fake.SendKey(keycode, true)
+	}
+	f.upCalls.Add(1)
+	f.startOnce.Do(func() { close(f.releaseStarted) })
+	<-f.releaseBlock
+	return f.Fake.SendKey(keycode, false)
+}
+
+func (f *blockingReleaseFake) unblock() {
+	f.unblockOnce.Do(func() { close(f.releaseBlock) })
+}
+
+func TestDestShutdownBoundsBlockedReleaseAndDoesNotRetry(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	c1, c2 := net.Pipe()
-	defer func() { _ = c1.Close() }()
+	fake := &blockingReleaseFake{
+		Fake:           vnext.NewFake(),
+		releaseStarted: make(chan struct{}),
+		releaseBlock:   make(chan struct{}),
+	}
+	defer fake.unblock()
 	connections := newDestConnSet()
 	if !connections.add(c2) {
 		t.Fatal("connection set rejected before shutdown")
 	}
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		defer connections.remove(c2)
+		serveVNextConnContext(ctx, c2, fake)
+	}()
+	if _, err := fmt.Fprintln(c1, `{"op":"key","name":"F1","press":true}`); err != nil {
+		t.Fatal(err)
+	}
+	scanner := bufio.NewScanner(c1)
+	if !scanner.Scan() {
+		t.Fatal("missing key down response")
+	}
+	cancel()
+	if err := c1.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-fake.releaseStarted:
+	case <-time.After(time.Second):
+		t.Fatal("session release did not start")
+	}
+
 	start := time.Now()
 	err := connections.shutdown(20 * time.Millisecond)
 	if !errors.Is(err, errDestShutdownTimeout) {
@@ -339,8 +392,20 @@ func TestDestShutdownRejectsNewConnectionsAndIsBounded(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("shutdown exceeded bound: %s", elapsed)
 	}
+	if calls := fake.upCalls.Load(); calls != 1 {
+		t.Fatalf("release attempts=%d want 1", calls)
+	}
 	if connections.add(c1) {
 		t.Fatal("connection set admitted after shutdown")
+	}
+	fake.unblock()
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not finish after release unblocked")
+	}
+	if calls := fake.upCalls.Load(); calls != 1 {
+		t.Fatalf("release retried after timeout: %d", calls)
 	}
 }
 

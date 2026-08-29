@@ -33,6 +33,6 @@ and run with the same numeric UID. Do not place the lock on a filesystem whose
 `flock` behavior is uncertain, and do not replace it while the daemon runs.
 
 Unix JSON mode handles `SIGINT` and `SIGTERM` with a five-second shutdown
-bound. It stops admission, closes command connections, and attempts each
-session's held-input release once. It never retries an ambiguous mutation or a
-failed release.
+bound. It stops admission, closes command connections, and lets each handler
+run one final session cleanup pass. The shutdown coordinator does not loop on
+failed up events or retry an ambiguous in-flight mutation.

@@ -462,8 +462,10 @@ func serveVNext(ctx context.Context, path string, allow, gids []uint32) error {
 	backend := destBackend(allow)
 	connSem := make(chan struct{}, destMaxConns)
 	connections := newDestConnSet()
+	handlerCtx, cancelHandlers := context.WithCancel(ctx)
 	unixListener, ok := ln.(*net.UnixListener)
 	if !ok {
+		cancelHandlers()
 		_ = ln.Close()
 		_ = os.Remove(path)
 		return errors.New("destination listener is not Unix")
@@ -513,17 +515,15 @@ func serveVNext(ctx context.Context, path string, allow, gids []uint32) error {
 					fmt.Fprintln(os.Stderr, "xtest-server: destination handler panic")
 				}
 			}()
-			serveVNextConnContext(ctx, c, &backend)
+			serveVNextConnContext(handlerCtx, c, &backend)
 		}(conn)
 	}
 	if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) && serveErr == nil {
 		serveErr = fmt.Errorf("closing destination listener: %w", err)
 	}
+	cancelHandlers()
 	if err := connections.shutdown(destShutdownTimeout); err != nil {
 		return err
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) && serveErr == nil {
-		serveErr = fmt.Errorf("removing destination socket: %w", err)
 	}
 	return serveErr
 }

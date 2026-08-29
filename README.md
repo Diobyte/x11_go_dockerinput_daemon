@@ -125,9 +125,10 @@ daemon is running. A differently configured lock file cannot coordinate, so
 the deployment must still define exactly one shared authority path per server.
 
 On `SIGINT` or `SIGTERM`, Unix JSON mode stops admission, closes active
-connections, attempts each session's held-input release once, and waits at most
-five seconds. An in-flight mutation can still have an ambiguous outcome and
-must not be replayed automatically.
+connections, lets each handler run one final session cleanup pass, and waits at
+most five seconds. The shutdown coordinator does not loop on failed up events.
+An in-flight mutation can still have an ambiguous outcome and must not be
+replayed automatically.
 
 ## Quick start: private Unix socket
 
@@ -208,7 +209,8 @@ Read [SECURITY.md](SECURITY.md) before deploying the service.
 - Mutating requests are never automatically replayed after an ambiguous
   connection failure.
 - Disconnect cleanup releases only keys and buttons tracked for that client.
-- Unix JSON shutdown is bounded and never retries a failed session release.
+- Unix JSON shutdown is bounded and does not retry within its final cleanup
+  pass.
 - Window names, classes, process IDs, and XIDs may be sensitive operational
   data and should not be logged indiscriminately.
 
